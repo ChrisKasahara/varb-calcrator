@@ -2,7 +2,7 @@ export type Operation = '+' | '-' | '×' | '÷';
 export type VariableColor = 'red' | 'yellow' | 'blue' | 'orange' | 'green' | 'white';
 
 export interface ExpressionToken {
-  type: 'operand' | 'operator';
+  type: 'operand' | 'operator' | 'parenthesis';
   value: string;
   label?: string; // User defined name for the operand
   unit?: string; // Unit string (e.g. "円", "kg")
@@ -31,6 +31,8 @@ export class Calculator {
   private currentUnit: string | null = null;
   private currentColor: VariableColor | null = null;
   
+  // Previous value logic is kept for basic 1+1 intermediate calc visualization if needed,
+  // but we primarily rely on inputHistory for the full expression now.
   private previousValue: string | null = null;
   private previousLabel: string | null = null;
   private previousUnit: string | null = null;
@@ -62,6 +64,12 @@ export class Calculator {
       this.currentColor = null; // Reset color on new input start
       this.shouldResetScreen = false;
       this.isIntermediateResult = false; // User is typing, no longer intermediate
+      
+      // If we just finished a calculation (shouldResetScreen=true) and user types a number,
+      // we usually start fresh. Logic handled in inputHistory management.
+      if (this.operation === null && this.inputHistory.length === 0) {
+          // Fresh start
+      }
     } else {
       if (this.currentValue === '0' && digit !== '.') {
         this.currentValue = digit;
@@ -69,7 +77,6 @@ export class Calculator {
           if(digit === '.' && this.currentValue.includes('.')) return;
         this.currentValue += digit;
         this.currentLabel = null; // Clear label if modifying value
-        // Keep unit? (e.g. 100円 -> 1000円). Yes, keeps unit.
       }
     }
   }
@@ -81,14 +88,30 @@ export class Calculator {
       }
   }
 
-  public setOperation(op: Operation): void {
-    // Add current value to input history in two cases:
-    // 1. User has typed a new value (!shouldResetScreen)
-    // 2. Starting a new calculation with previous result (shouldResetScreen && !operation)
-    const isStartingNewCalculation = this.shouldResetScreen && this.operation === null;
-    const hasTypedNewValue = !this.shouldResetScreen;
-    
-    if (hasTypedNewValue || isStartingNewCalculation) {
+  public inputParenthesis(type: '(' | ')'): void {
+      // If user types '('
+      // If we are typing a number (not reset screen), it's multiplication? "2(" -> "2 * ("
+      // For now, simpler: '(' is allowed at start or after operator.
+      // If after number, assume multiplication? Let's just push it for now.
+      
+      if (type === '(') {
+          if (!this.shouldResetScreen && this.currentValue !== '0' && this.currentValue !== '') {
+              // Implicit multiplication: 2( -> 2 * (
+              this.setOperation('×');
+          }
+          this.inputHistory.push({ type: 'parenthesis', value: '(' });
+      } else {
+          // ')'
+          // Push current value first if valid
+          if (!this.shouldResetScreen) {
+             this.pushCurrentValueToHistory();
+          }
+          this.inputHistory.push({ type: 'parenthesis', value: ')' });
+          this.shouldResetScreen = true; // After ')', next input starts new or follows op
+      }
+  }
+
+  private pushCurrentValueToHistory(): void {
       this.inputHistory.push({
         type: 'operand',
         value: this.currentValue,
@@ -98,141 +121,162 @@ export class Calculator {
         nameLabel: this.formatNameLabel(this.currentLabel, this.currentUnit),
         color: this.currentColor || undefined
       });
-    }
-    
-    // Only calculate intermediate if we have an operation and user has typed something
-    if (this.operation !== null && !this.shouldResetScreen) {
-      this.calculateIntermediate();
-    }
-    
-    // Add operator to input history (only if we added an operand)
-    if (hasTypedNewValue || isStartingNewCalculation) {
-      this.inputHistory.push({
-        type: 'operator',
-        value: op
-      });
-    }
-    
-    // Move current to previous
-    this.previousValue = this.currentValue;
-    this.previousLabel = this.currentLabel;
-    this.previousUnit = this.currentUnit;
-    this.previousColor = this.currentColor;
-    
-    this.operation = op;
-    this.shouldResetScreen = true;
   }
 
-  // Internal calculation for chain operations (doesn't add to history)
-  private calculateIntermediate(): void {
-    if (this.previousValue === null || this.operation === null) return;
-
-    const current = parseFloat(this.currentValue);
-    const previous = parseFloat(this.previousValue);
-    let result = 0;
-
-    switch (this.operation) {
-      case '+': result = previous + current; break;
-      case '-': result = previous - current; break;
-      case '×': result = previous * current; break;
-      case '÷':
-        if (current === 0) {
-            this.handleError();
+  public setOperation(op: Operation): void {
+    const isStartingNewCalculation = this.shouldResetScreen && this.inputHistory.length === 0;
+    const hasTypedNewValue = !this.shouldResetScreen;
+    
+    // If user presses op after typing number, push number.
+    if (hasTypedNewValue) {
+      this.pushCurrentValueToHistory();
+    } 
+    // If user presses op after result (isStartingNewCalculation), 
+    // we use the result as the first operand.
+    else if (isStartingNewCalculation) {
+        // Only if inputHistory is empty (meaning we just cleared or finished calc)
+        // AND we have a currentValue (result).
+         this.inputHistory.push({
+            type: 'operand',
+            value: this.currentValue,
+            label: this.currentLabel || undefined,
+            unit: this.currentUnit || undefined,
+            numberLabel: this.formatNumberLabel(this.currentValue, this.currentUnit),
+            nameLabel: this.formatNameLabel(this.currentLabel, this.currentUnit),
+            color: this.currentColor || undefined
+        });
+    } else {
+        // If user presses op after just pushing an operator, replace it?
+        // Or if after ')'.
+        const last = this.inputHistory[this.inputHistory.length - 1];
+        if (last && last.type === 'operator') {
+            last.value = op; // Replace operator
+            this.operation = op;
             return;
         }
-        result = previous / current;
-        break;
     }
-
-    this.currentValue = this.formatResult(result);
+    
+    this.inputHistory.push({
+      type: 'operator',
+      value: op
+    });
+    
+    this.operation = op; // Keep for display/intermediate logic if needed, but primary is inputHistory
+    this.shouldResetScreen = true;
+    
+    // Reset "current" naming/coloring properties for the next number
     this.currentLabel = null;
     this.currentUnit = null;
-    this.isIntermediateResult = true; // Mark as intermediate result
+    this.currentColor = null;
+  }
+
+  // Not used as strictly anymore, but compatible fallback
+  private calculateIntermediate(): void {
+     // No-op for complex precedence calculator or implement partial eval
   }
 
   public calculate(): void {
-    if (this.previousValue === null || this.operation === null) return;
+    // 1. Push final value if pending
+    if (!this.shouldResetScreen) {
+        this.pushCurrentValueToHistory();
+    }
+    
+    const expression = [...this.inputHistory];
+    
+    if (expression.length === 0) return;
 
-    // If shouldResetScreen is true, user pressed = right after an operator
-    // Don't perform calculation, just finalize with current result
-    if (this.shouldResetScreen) {
-      // Remove trailing operator from inputHistory
-      if (this.inputHistory.length > 0 && this.inputHistory[this.inputHistory.length - 1].type === 'operator') {
-        this.inputHistory.pop();
-      }
+    // 2. Evaluate using Shunting-yard + RPN Evaluator
+    try {
+        const resultVal = this.evaluateExpression(expression);
+        const resultString = this.formatResult(resultVal);
+
+        // 3. Save History
+        this.history.unshift({
+            expressionTokens: [...expression],
+            result: resultString
+        });
+        if (this.history.length > 50) this.history.pop();
+        
+        // 4. Reset State
+        this.currentValue = resultString;
+        this.inputHistory = []; // Clear current expression
+        this.shouldResetScreen = true;
+        this.isIntermediateResult = false;
+        
+        this.operation = null;
+        this.currentLabel = null; 
+        this.currentUnit = null;
+        this.currentColor = null;
+
+    } catch (e) {
+        this.handleError();
+    }
+  }
+
+  private evaluateExpression(tokens: ExpressionToken[]): number {
+      const outputQueue: ExpressionToken[] = [];
+      const operatorStack: ExpressionToken[] = [];
       
-      // Save current expression to history without adding duplicate operand
-      this.history.unshift({
-        expressionTokens: [...this.inputHistory],
-        result: this.currentValue
+      const precedence: {[key: string]: number} = {
+          '+': 1, '-': 1,
+          '×': 2, '÷': 2
+      };
+
+      tokens.forEach(token => {
+          if (token.type === 'operand') {
+              outputQueue.push(token);
+          } else if (token.type === 'operator') {
+              while (operatorStack.length > 0 && 
+                     operatorStack[operatorStack.length - 1].type === 'operator' &&
+                     precedence[operatorStack[operatorStack.length - 1].value] >= precedence[token.value]) {
+                  outputQueue.push(operatorStack.pop()!);
+              }
+              operatorStack.push(token);
+          } else if (token.type === 'parenthesis') {
+              if (token.value === '(') {
+                  operatorStack.push(token);
+              } else {
+                  while (operatorStack.length > 0 && operatorStack[operatorStack.length - 1].value !== '(') {
+                      outputQueue.push(operatorStack.pop()!);
+                  }
+                  if (operatorStack.length > 0 && operatorStack[operatorStack.length - 1].value === '(') {
+                      operatorStack.pop(); // Pop '('
+                  }
+              }
+          }
       });
       
-      if (this.history.length > 50) this.history.pop();
+      while (operatorStack.length > 0) {
+          const op = operatorStack.pop()!;
+          if (op.type === 'parenthesis') continue; // Mismatched parens logic
+          outputQueue.push(op);
+      }
       
-      this.inputHistory = [];
-      this.operation = null;
-      this.previousValue = null;
-      this.previousLabel = null;
-      this.previousUnit = null;
-      this.shouldResetScreen = true;
-      this.isIntermediateResult = false; // Final result, not intermediate
-      return;
-    }
-
-    // Normal calculation flow
-    // Add final operand to input history
-    this.inputHistory.push({
-      type: 'operand',
-      value: this.currentValue,
-      label: this.currentLabel || undefined,
-      unit: this.currentUnit || undefined,
-      numberLabel: this.formatNumberLabel(this.currentValue, this.currentUnit),
-      nameLabel: this.formatNameLabel(this.currentLabel, this.currentUnit),
-      color: this.currentColor || undefined
-    });
-
-    const current = parseFloat(this.currentValue);
-    const previous = parseFloat(this.previousValue);
-    let result = 0;
-
-    switch (this.operation) {
-      case '+': result = previous + current; break;
-      case '-': result = previous - current; break;
-      case '×': result = previous * current; break;
-      case '÷':
-        if (current === 0) {
-            this.handleError();
-            return;
-        }
-        result = previous / current;
-        break;
-    }
-
-    const resultString = this.formatResult(result);
-    
-    // Save the accumulated input history
-    this.history.unshift({
-        expressionTokens: [...this.inputHistory],
-        result: resultString
-    });
-
-    if (this.history.length > 50) this.history.pop();
-
-    // Clear input history for next calculation
-    this.inputHistory = [];
-
-    this.currentValue = resultString;
-    this.currentLabel = null; 
-    this.currentUnit = null;
-    this.currentColor = null;
-    
-    this.operation = null;
-    this.previousValue = null;
-    this.previousLabel = null;
-    this.previousUnit = null;
-    this.previousColor = null;
-    this.shouldResetScreen = true;
-    this.isIntermediateResult = false; // Final result, not intermediate
+      // RPN Evaluation
+      const evalStack: number[] = [];
+      outputQueue.forEach(token => {
+          if (token.type === 'operand') {
+              evalStack.push(parseFloat(token.value));
+          } else if (token.type === 'operator') {
+              const b = evalStack.pop();
+              const a = evalStack.pop();
+              if (a === undefined || b === undefined) throw new Error("Invalid Expression");
+              
+              let res = 0;
+              switch (token.value) {
+                  case '+': res = a + b; break;
+                  case '-': res = a - b; break;
+                  case '×': res = a * b; break;
+                  case '÷': 
+                    if (b === 0) throw new Error("Division by Zero");
+                    res = a / b; break;
+              }
+              evalStack.push(res);
+          }
+      });
+      
+      if (evalStack.length === 0) return 0;
+      return evalStack[0];
   }
 
   public clear(): void {
@@ -272,35 +316,31 @@ export class Calculator {
   }
 
   public setLabel(target: 'current' | 'previous', label: string, color?: VariableColor | null): void {
+      // Logic adaptation: 'previous' is now ambiguous with history, but usually implies the last entered operand.
+      // 'current' is the one being typed.
+      
       if (target === 'current') {
           this.currentLabel = label;
           if (color !== undefined) this.currentColor = color;
-      } else if (target === 'previous') {
-          this.previousLabel = label;
-          if (color !== undefined) this.previousColor = color;
-          
-          // Also update inputHistory if exists
-          if (this.inputHistory.length > 0) {
-              // Find the last operand
+      } else {
+          // Find last operand in inputHistory
+           if (this.inputHistory.length > 0) {
               for (let i = this.inputHistory.length - 1; i >= 0; i--) {
                   if (this.inputHistory[i].type === 'operand') {
                       this.inputHistory[i].label = label;
                       this.inputHistory[i].nameLabel = this.formatNameLabel(label, this.inputHistory[i].unit || null);
                       if (color !== undefined) this.inputHistory[i].color = color || undefined;
-                      break; // Only update the very last operand pushed (which is 'previous')
+                      break;
                   }
               }
-          }
+           }
       }
   }
 
   public setUnit(target: 'current' | 'previous', unit: string | null): void {
       if (target === 'current') {
           this.currentUnit = unit;
-      } else if (target === 'previous') {
-          this.previousUnit = unit;
-          
-          // Update inputHistory
+      } else {
           if (this.inputHistory.length > 0) {
                for (let i = this.inputHistory.length - 1; i >= 0; i--) {
                   if (this.inputHistory[i].type === 'operand') {
@@ -319,22 +359,14 @@ export class Calculator {
       if (!item) return;
       
       this.clear();
-      
-      // Deep copy relevant tokens to inputHistory to allow editing/viewing
       this.inputHistory = item.expressionTokens.map(t => ({...t}));
-      
       this.currentValue = item.result;
       this.shouldResetScreen = true;
-      
-      // We purposefully don't reconstruct previous/operation/current individual fields
-      // because buildExpressionTokens will prefer inputHistory if it exists.
-      // This effectively "snapshots" the loaded state.
   }
 
   public getDisplayValue(): string {
     return this.formatNumber(this.currentValue);
   }
-
 
   private formatNumber(value: string | null): string {
       if (!value) return '';
@@ -399,8 +431,6 @@ export class Calculator {
       } else {
           this.variables.push(newVar);
       }
-      // Sort by newest? Or alphabetical? Let's keep newest first if we unshift, or just push.
-      // Let's sort by timestamp desc for display usually.
       this.variables.sort((a, b) => b.timestamp - a.timestamp);
   }
 
@@ -413,101 +443,36 @@ export class Calculator {
   }
 
   public inputVariable(variable: SavedVariable): void {
-      // Treat as inputting a number, but also set the label
-      this.inputDigit(variable.value); // This handles the value input logic (reset screen etc)
+      this.inputDigit(variable.value); 
       
       this.currentValue = variable.value;
       this.currentLabel = variable.label;
       this.currentUnit = variable.unit || null;
       this.currentColor = variable.color || null;
-      this.shouldResetScreen = false; // User is "editing" this value effectively, or it is a set value.
-      // If we want to allow immediate operation after, this is fine.
+      this.shouldResetScreen = false; 
   }
 
   private buildExpressionTokens(forHistory: boolean = false): ExpressionToken[] {
-      const tokens: ExpressionToken[] = [];
+      // For display, we want to show the full accumulated history + current typing buffer
+      let tokens: ExpressionToken[] = [...this.inputHistory];
       
-      // If we have accumulated input history, use that instead
-      if (this.inputHistory.length > 0) {
-          const tokens = [...this.inputHistory];
-          
-          // Add current value if user is typing (not reset screen)
-          if (!this.shouldResetScreen && this.currentValue !== '0') {
-              tokens.push({
-                  type: 'operand',
-                  value: this.currentValue,
-                  label: this.currentLabel || undefined,
-                  unit: this.currentUnit || undefined,
-                  numberLabel: this.formatNumberLabel(this.currentValue, this.currentUnit),
-                  nameLabel: this.formatNameLabel(this.currentLabel, this.currentUnit),
-                  color: this.currentColor || undefined,
-                  id: 'current'
-              });
-          }
-          
-          return tokens;
-      }
-      
-      // Add Previous (Token 1)
-      if (this.previousValue !== null) {
-          const unitStr = this.previousUnit ? this.previousUnit : '';
+      // Add current value if user is typing (not freshly reset/just calculated)
+      // OR if the user just started typing after an operator (shouldResetScreen=false)
+      if (!this.shouldResetScreen && this.currentValue !== '') {
+          // Avoid duplicating if inputHistory is empty and we are just starting? 
+          // No, inputHistory is strictly "committed" tokens. CurrentValue is "buffer".
           tokens.push({
               type: 'operand',
-              value: this.previousValue,
-              label: this.previousLabel || undefined,
-              unit: this.previousUnit || undefined,
-              numberLabel: this.formatNumber(this.previousValue) + (this.previousUnit ? ` ${this.previousUnit}` : ''),
-              nameLabel: this.previousLabel || undefined,
-              color: this.previousColor || undefined,
-              id: 'previous'
+              value: this.currentValue,
+              label: this.currentLabel || undefined,
+              unit: this.currentUnit || undefined,
+              numberLabel: this.formatNumberLabel(this.currentValue, this.currentUnit),
+              nameLabel: this.formatNameLabel(this.currentLabel, this.currentUnit),
+              color: this.currentColor || undefined,
+              id: 'current'
           });
       }
-
-      // Add Operator
-      if (this.operation !== null) {
-          tokens.push({
-              type: 'operator',
-              value: this.operation
-          });
-      }
-
-      // Add Current (Token 2) - logic: show if we have an op OR if it's the only thing (but typically "1 *" shows previous and op).
-      // If we have previous & op, we definitely show current buffer as the second operand (live update)
-      // If we ONLY have current (initial state), we show it?
-      // User request: "1 * 2" -> show "1 * 2" immediately.
-      // Logic: If op exists, we are entering the second operand.
-      if (this.previousValue) {
-           // We are in second operand phase.
-           // Only show current value if we have started typing it (shouldResetScreen is false)
-           if (!this.shouldResetScreen) {
-               tokens.push({
-                   type: 'operand',
-                   value: this.currentValue,
-                   label: this.currentLabel || undefined,
-                   unit: this.currentUnit || undefined,
-                   numberLabel: this.formatNumber(this.currentValue) + (this.currentUnit ? ` ${this.currentUnit}` : ''),
-                   nameLabel: this.currentLabel || undefined,
-                   color: this.currentColor || undefined,
-                   id: 'current'
-               });
-           }
-      } else {
-          // We are in first operand phase.
-          // Usually sub-display is empty or shows just what's typed?
-          // If the user wants to name the FIRST number, it should appear in sub-display?
-          // Let's assume sub-display mirrors the full equation in progress.
-          tokens.push({
-               type: 'operand',
-               value: this.currentValue,
-               label: this.currentLabel || undefined,
-               unit: this.currentUnit || undefined,
-               numberLabel: this.formatNumber(this.currentValue) + (this.currentUnit ? ` ${this.currentUnit}` : ''),
-               nameLabel: this.currentLabel || undefined,
-               color: this.currentColor || undefined,
-               id: 'current'
-           });
-      }
-
+      
       return tokens;
   }
 
@@ -516,6 +481,7 @@ export class Calculator {
       this.previousValue = null;
       this.operation = null;
       this.shouldResetScreen = true;
+      this.inputHistory = [];
   }
 
   private formatResult(num: number): string {
