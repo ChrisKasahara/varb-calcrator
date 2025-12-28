@@ -72,6 +72,12 @@ export default function Calculator() {
       updateState();
   };
 
+  const handleParenthesis = (type: '(' | ')') => {
+      setTempContext(null);
+      calculator.inputParenthesis(type);
+      updateState();
+  };
+
   // Renaming state
   const [editingToken, setEditingToken] = useState<{ token: ExpressionToken, label: string, unit: string, color: VariableColor | null } | null>(null);
   
@@ -185,6 +191,7 @@ export default function Calculator() {
           const mappedOp = key === "*" ? "×" : key === "/" ? "÷" : key as Operation;
           handleOp(mappedOp);
       }
+      if (key === "(" || key === ")") handleParenthesis(key);
       if (key === "Enter" || key === "=") {
           e.preventDefault();
           handleEqual();
@@ -454,8 +461,8 @@ export default function Calculator() {
         {/* Keypad - Tiled Layout */}
         <div className="grid grid-cols-4 gap-[1px] bg-white/5 p-[1px]">
           <Button label="AC" onClick={handleClear} variant="secondary" />
-          <Button label="+/-" onClick={handleToggleSign} variant="secondary" />
-          <Button label="%" onClick={handlePercent} variant="secondary" />
+          <Button label="(" onClick={() => handleParenthesis('(')} variant="secondary" />
+          <Button label=")" onClick={() => handleParenthesis(')')} variant="secondary" />
           <Button label="÷" onClick={() => handleOp("÷")} variant="primary" />
 
           <Button label="7" onClick={() => handleDigit("7")} />
@@ -473,8 +480,9 @@ export default function Calculator() {
           <Button label="3" onClick={() => handleDigit("3")} />
           <Button label="+" onClick={() => handleOp("+")} variant="primary" />
 
-          <Button label="0" onClick={() => handleDigit("0")} className="col-span-2 w-full !aspect-auto" />
+          <Button label="0" onClick={() => handleDigit("0")} />
           <Button label="." onClick={() => handleDigit(".")} />
+          <Button label="+/-" onClick={handleToggleSign} />
           <Button label="=" onClick={handleEqual} variant="primary" />
         </div>
       </div>
